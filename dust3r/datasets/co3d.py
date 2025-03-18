@@ -19,7 +19,7 @@ from dust3r.utils.image import imread_cv2
 
 
 class Co3d(BaseStereoViewDataset):
-    def __init__(self, mask_bg=True, *args, ROOT, **kwargs):
+    def __init__(self, mask_bg=True, *args, ROOT, track_length=2, **kwargs):
         self.ROOT = ROOT
         super().__init__(*args, **kwargs)
         assert mask_bg in (True, False, 'rand')
@@ -41,6 +41,18 @@ class Co3d(BaseStereoViewDataset):
                              if 0 < abs(i - j) <= 30 and abs(i - j) % 5 == 0]
 
         self.invalidate = {scene: {} for scene in self.scene_list}
+
+        self.num_views = track_length
+        if track_length > 2:
+            self._build_index()
+    
+    def _build_index(self):
+        from collections import defaultdict
+        combinations_dict = defaultdict(list)
+        for i, j in self.combinations:
+            combinations_dict[i].append(j)
+            combinations_dict[j].append(i)
+        self.combinations_dict = combinations_dict
 
     def __len__(self):
         return len(self.scene_list) * len(self.combinations)
@@ -77,8 +89,17 @@ class Co3d(BaseStereoViewDataset):
         # decide now if we mask the bg
         mask_bg = (self.mask_bg == True) or (self.mask_bg == 'rand' and rng.choice(2))
 
+        if self.num_views > 2:
+            im_idx = im1_idx
+            track = [im_idx]
+            while len(track) < self.num_views:
+                candidates = self.combinations_dict[im_idx]
+                track.append(rng.choice(candidates))
+        else:
+            track = [im1_idx, im2_idx]
+
         views = []
-        imgs_idxs = [max(0, min(im_idx + rng.integers(-4, 5), last)) for im_idx in [im2_idx, im1_idx]]
+        imgs_idxs = [max(0, min(im_idx + rng.integers(-4, 5), last)) for im_idx in track[::-1]]
         imgs_idxs = deque(imgs_idxs)
         while len(imgs_idxs) > 0:  # some images (few) have zero depth
             im_idx = imgs_idxs.pop()

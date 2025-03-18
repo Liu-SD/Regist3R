@@ -17,13 +17,25 @@ class BlendedMVS (BaseStereoViewDataset):
     """ Dataset of outdoor street scenes, 5 images each time
     """
 
-    def __init__(self, *args, ROOT, split=None, **kwargs):
+    def __init__(self, *args, ROOT, track_length=2, split=None, **kwargs):
         self.ROOT = ROOT
         super().__init__(*args, **kwargs)
         self._load_data(split)
+        self.num_views = track_length
+        if track_length > 2:
+            self._build_index()
+
+    def _build_index(self):
+        from collections import defaultdict
+        from functools import partial
+        pairs_dict = defaultdict(partial(defaultdict, list))
+        for seqh, seql, img1, img2, score in self.pairs:
+            pairs_dict[(seqh, seql)][img1].append(img2)
+            pairs_dict[(seqh, seql)][img2].append(img1)
+        self.pairs_dict = pairs_dict
 
     def _load_data(self, split):
-        pairs = np.load(osp.join(self.ROOT, 'blendedmvs_pairs.npy'))
+        pairs = np.load(osp.join(self.ROOT, 'blendedmvs_exist_pairs.npy'))
         if split is None:
             selection = slice(None)
         if split == 'train':
@@ -46,12 +58,22 @@ class BlendedMVS (BaseStereoViewDataset):
     def _get_views(self, pair_idx, resolution, rng):
         seqh, seql, img1, img2, score = self.pairs[pair_idx]
 
+        if self.num_views > 2:
+            view_index = img1
+            track = [view_index]
+            while len(track) < self.num_views:
+                candidates = self.pairs_dict[(seqh, seql)][view_index]
+                view_index = rng.choice(candidates)
+                track.append(view_index)
+        else:
+            track = [img1, img2]
+
         seq = f"{seqh:08x}{seql:016x}"
         seq_path = osp.join(self.ROOT, seq)
 
         views = []
 
-        for view_index in [img1, img2]:
+        for view_index in track:
             impath = f"{view_index:08n}"
             image = imread_cv2(osp.join(seq_path, impath + ".jpg"))
             depthmap = imread_cv2(osp.join(seq_path, impath + ".exr"))

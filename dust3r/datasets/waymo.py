@@ -17,18 +17,31 @@ class Waymo (BaseStereoViewDataset):
     """ Dataset of outdoor street scenes, 5 images each time
     """
 
-    def __init__(self, *args, ROOT, **kwargs):
+    def __init__(self, *args, ROOT, track_length=2, **kwargs):
         self.ROOT = ROOT
         super().__init__(*args, **kwargs)
         self._load_data()
 
+        self.num_views = track_length
+        if track_length > 2:
+            self._build_index()
+
     def _load_data(self):
-        with np.load(osp.join(self.ROOT, 'waymo_pairs.npz')) as data:
+        with np.load(osp.join(self.ROOT, 'waymo_exist_pairs.npz')) as data:
             self.scenes = data['scenes']
             self.frames = data['frames']
             self.inv_frames = {frame: i for i, frame in enumerate(data['frames'])}
             self.pairs = data['pairs']  # (array of (scene_id, img1_id, img2_id)
             assert self.pairs[:, 0].max() == len(self.scenes) - 1
+    
+    def _build_index(self):
+        from collections import defaultdict
+        from functools import partial
+        pairs_dict = defaultdict(partial(defaultdict, list))
+        for seq, img1, img2 in self.pairs:
+            pairs_dict[seq][img1].append(img2)
+            pairs_dict[seq][img2].append(img1)
+        self.pairs_dict = pairs_dict
 
     def __len__(self):
         return len(self.pairs)
@@ -40,9 +53,19 @@ class Waymo (BaseStereoViewDataset):
         seq, img1, img2 = self.pairs[pair_idx]
         seq_path = osp.join(self.ROOT, self.scenes[seq])
 
+        if self.num_views > 2:
+            view_index = img1
+            track = [view_index]
+            while len(track) < self.num_views:
+                candidates = self.pairs_dict[seq][view_index]
+                view_index = rng.choice(candidates)
+                track.append(view_index)
+        else:
+            track = [img1, img2]
+
         views = []
 
-        for view_index in [img1, img2]:
+        for view_index in track:
             impath = self.frames[view_index]
             image = imread_cv2(osp.join(seq_path, impath + ".jpg"))
             depthmap = imread_cv2(osp.join(seq_path, impath + ".exr"))

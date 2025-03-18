@@ -14,7 +14,7 @@ from dust3r.utils.image import imread_cv2
 
 
 class MegaDepth(BaseStereoViewDataset):
-    def __init__(self, *args, split, ROOT, **kwargs):
+    def __init__(self, *args, split, ROOT, track_length=2, **kwargs):
         self.ROOT = ROOT
         super().__init__(*args, **kwargs)
         self.loaded_data = self._load_data(self.split)
@@ -27,12 +27,25 @@ class MegaDepth(BaseStereoViewDataset):
             self.select_scene(('0015', '0022'))
         else:
             raise ValueError(f'bad {self.split=}')
+        
+        self.num_views = track_length
+        if track_length > 2:
+            self._build_index()
 
     def _load_data(self, split):
         with np.load(osp.join(self.ROOT, 'all_metadata.npz')) as data:
             self.all_scenes = data['scenes']
             self.all_images = data['images']
             self.pairs = data['pairs']
+    
+    def _build_index(self):
+        from collections import defaultdict
+        from functools import partial
+        pairs_dict = defaultdict(partial(defaultdict, list))
+        for scene_id, im1_id, im2_id, score in self.pairs:
+            pairs_dict[scene_id][im1_id].append(im2_id)
+            pairs_dict[scene_id][im2_id].append(im1_id)
+        self.pairs_dict = pairs_dict
 
     def __len__(self):
         return len(self.pairs)
@@ -64,12 +77,22 @@ class MegaDepth(BaseStereoViewDataset):
     def _get_views(self, pair_idx, resolution, rng):
         scene_id, im1_id, im2_id, score = self.pairs[pair_idx]
 
+        if self.num_views > 2:
+            im_id = im1_id
+            track = [im_id]
+            while len(track) < self.num_views:
+                candidates = self.pairs_dict[scene_id][im_id]
+                im_id = rng.choice(candidates)
+                track.append(im_id)
+        else:
+            track = [im1_id, im2_id]
+
         scene, subscene = self.all_scenes[scene_id].split()
         seq_path = osp.join(self.ROOT, scene, subscene)
 
         views = []
 
-        for im_id in [im1_id, im2_id]:
+        for im_id in track:
             img = self.all_images[im_id]
             try:
                 image = imread_cv2(osp.join(seq_path, img + '.jpg'))

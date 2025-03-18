@@ -70,7 +70,7 @@ def _resize_pil_image(img, long_edge_size):
     return img.resize(new_size, interp)
 
 
-def load_images(folder_or_list, size, square_ok=False, verbose=True):
+def load_images(folder_or_list, size, consistent_shape=False, square_ok=False, verbose=True):
     """ open and convert all images in a list or folder to proper input format for DUSt3R
     """
     if isinstance(folder_or_list, str):
@@ -113,8 +113,12 @@ def load_images(folder_or_list, size, square_ok=False, verbose=True):
             if not (square_ok) and W == H:
                 halfh = 3*halfw/4
             img = img.crop((cx-halfw, cy-halfh, cx+halfw, cy+halfh))
+        if consistent_shape and len(imgs) > 0:
+            img = img.resize((consistent_W, consistent_H))
 
         W2, H2 = img.size
+        if consistent_shape and len(imgs) == 0:
+            consistent_W, consistent_H = W2, H2
         if verbose:
             print(f' - adding {path} with resolution {W1}x{H1} --> {W2}x{H2}')
         imgs.append(dict(img=ImgNorm(img)[None], true_shape=np.int32(
@@ -124,3 +128,17 @@ def load_images(folder_or_list, size, square_ok=False, verbose=True):
     if verbose:
         print(f' (Found {len(imgs)} images)')
     return imgs
+
+def colorize_depth(depth: np.ndarray, mask: np.ndarray = None, normalize: bool = True, cmap: str = 'Spectral') -> np.ndarray:
+    import matplotlib
+    if mask is None:
+        depth = np.where(depth > 0, depth, np.nan)
+    else:
+        depth = np.where((depth > 0) & mask, depth, np.nan)
+    disp = 1 / depth
+    if normalize:
+        min_disp, max_disp = np.nanquantile(disp, 0.001), np.nanquantile(disp, 0.999)
+        disp = (disp - min_disp) / (max_disp - min_disp)
+    colored = np.nan_to_num(matplotlib.colormaps[cmap](1.0 - disp), 0)
+    colored = colored.clip(0, 1)[:, :, :3]
+    return colored

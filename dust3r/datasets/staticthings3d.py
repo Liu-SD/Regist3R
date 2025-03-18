@@ -16,7 +16,7 @@ from dust3r.utils.image import imread_cv2
 class StaticThings3D (BaseStereoViewDataset):
     """ Dataset of indoor scenes, 5 images each time
     """
-    def __init__(self, ROOT, *args, mask_bg='rand', **kwargs):
+    def __init__(self, ROOT, *args, track_length=2, mask_bg='rand', **kwargs):
         self.ROOT = ROOT
         super().__init__(*args, **kwargs)
 
@@ -26,6 +26,20 @@ class StaticThings3D (BaseStereoViewDataset):
         # loading all pairs
         assert self.split is None
         self.pairs = np.load(osp.join(ROOT, 'staticthings_pairs.npy'))
+        
+        self.num_views = track_length
+        if track_length > 2:
+            self._build_index()
+
+    
+    def _build_index(self):
+        from collections import defaultdict
+        from functools import partial
+        pairs_dict = defaultdict(partial(defaultdict, list))
+        for scene, seq, cam1, im1, cam2, im2 in self.pairs:
+            pairs_dict[(scene, seq)][(cam1, im1)].append((cam2, im2))
+            pairs_dict[(scene, seq)][(cam2, im2)].append((cam1, im1))
+        self.pairs_dict = pairs_dict
 
     def __len__(self):
         return len(self.pairs)
@@ -37,12 +51,23 @@ class StaticThings3D (BaseStereoViewDataset):
         scene, seq, cam1, im1, cam2, im2 = self.pairs[pair_idx]
         seq_path = osp.join('TRAIN', scene.decode('ascii'), f'{seq:04d}')
 
+        CAM = {b'l':'left', b'r':'right'}
+        if self.num_views > 2:
+            cam, im = cam1, im1
+            track = [(CAM[cam], im)]
+            while len(track) < self.num_views:
+                candidates = self.pairs_dict[(scene, seq)][(cam, im)]
+                cam, im = rng.choice(candidates)
+                im = int(im)
+                track.append((CAM[cam], im))
+        else:
+            track = [(CAM[cam1], im1), (CAM[cam2], im2)]
+
         views = []
 
         mask_bg = (self.mask_bg == True) or (self.mask_bg == 'rand' and rng.choice(2))
 
-        CAM = {b'l':'left', b'r':'right'}
-        for cam, idx in [(CAM[cam1], im1), (CAM[cam2], im2)]:
+        for cam, idx in track:
             num = f"{idx:04n}"
             img = num+"_clean.jpg" if rng.choice(2) else num+"_final.jpg"
             image = imread_cv2(osp.join(self.ROOT, seq_path, cam, img))
