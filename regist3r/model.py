@@ -114,12 +114,6 @@ class Regist3R(CroCoNet):
         # all heads are trained from scratch
         ckpt = {k: v for k, v in ckpt.items() if not k.startswith('downstream_head1')}
         ckpt = {k: v for k, v in ckpt.items() if not k.startswith('downstream_head2')}
-        # temp
-        ckpt['downstream_head.dpt.head.4.weight'] = ckpt['downstream_head.dpt.head.4.weight'][:4]
-        ckpt['downstream_head.dpt.head.4.bias'] = ckpt['downstream_head.dpt.head.4.bias'][:4]
-        if ckpt['patch_embed_ref.proj.weight'].shape != self.patch_embed_ref.proj.weight.shape:
-            del ckpt['patch_embed_ref.proj.weight']
-            del ckpt['patch_embed_ref.proj.bias']
         new_ckpt = dict(ckpt)
         if not any(k.startswith('enc_blocks_ref') for k in ckpt):
             for key, value in ckpt.items():
