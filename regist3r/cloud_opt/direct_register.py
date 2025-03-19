@@ -25,22 +25,21 @@ class DirectRegister(BasePCOptimizer):
             imgs = [v for v in view['img']]
             self.imgs = rgb(imgs)
         
-        self.pp = [torch.tensor((W/2, H/2)) for H, W in self.imshapes]
-
         self.pts3d = [p for p in pred['pts3d']]
+        self.pp = [torch.tensor((W/2, H/2), device=self.device) for H, W in self.imshapes]
 
         focal = float(estimate_focal_knowing_depth(self.pts3d[0][None], self.pp[0], focal_mode='weiszfeld'))
 
         self.focals = [focal for _ in self.imshapes]
-        self.im_poses = [torch.eye(4)]
+        self.im_poses = [torch.eye(4, device=self.device)]
         self.depth = [self.pts3d[0][..., 2]]
         # use dust3r pts1 to compute focal, and share this focal among all frames.
         for i in tqdm.trange(1, self.n_imgs, desc="PnP Solving"):
             H, W = self.imshapes[i]
-            pts3d = self.pts3d[i].numpy()
+            pts3d = self.pts3d[i].cpu().numpy()
             pixels = np.mgrid[:W, :H].T.astype(np.float32)
             assert pts3d.shape[:2] == (H, W)
-            msk = self.get_masks()[i].numpy()
+            msk = self.get_masks()[i].cpu().numpy()
             K = np.float32([(focal, 0, W/2), (0, focal, H/2), (0, 0, 1)])
 
             try:
@@ -53,7 +52,7 @@ class DirectRegister(BasePCOptimizer):
                 pose = inv(np.r_[np.c_[R, T], [(0, 0, 0, 1)]])
             except:
                 pose = np.eye(4)
-            rel_pose = torch.from_numpy(pose.astype(np.float32))
+            rel_pose = torch.from_numpy(pose.astype(np.float32)).to(self.device)
             self.im_poses.append(rel_pose)
             self.depth.append(geotrf(inv(rel_pose), self.pts3d[i])[..., 2])
 

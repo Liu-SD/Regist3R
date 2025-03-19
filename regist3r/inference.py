@@ -65,7 +65,7 @@ def inference(sequence, filelist, dust3r_model, regist3r_model, mast3r_model, re
     # init_pair = [(sequence[start], sequence[start])]
     dust3r_res = loss_of_one_batch_dust3r(collate_with_cat(init_pair), dust3r_model, None, device)
     view1, view2, pred1, pred2 = [dust3r_res[k] for k in 'view1 view2 pred1 pred2'.split()]
-    result.append(to_cpu({'view': view1, 'pred': pred1, 'index': start, 'ref_index': start}))
+    result.append({'view': view1, 'pred': pred1, 'index': start, 'ref_index': start})
 
     view_nodes = tree.childs
     tree.pts = pred1['pts3d']
@@ -78,8 +78,8 @@ def inference(sequence, filelist, dust3r_model, regist3r_model, mast3r_model, re
             view = to_device(collate_with_cat([sequence[view_node.value]]))
             if verbose:
                 print(f"({len(result)+1}/{len(sequence)}|depth: {depth}) inference between {parent_node.value} and {view_node.value}.")
-            res = regist3r_model.inference(parent_view, parent_node.pts.to(device), view)
-            result.append(to_cpu({'view': view, 'pred': res, 'index': view_node.value, 'ref_index': parent_node.value}))
+            res = regist3r_model.inference(parent_view, parent_node.pts, view)
+            result.append({'view': view, 'pred': res, 'index': view_node.value, 'ref_index': parent_node.value})
             view['conf'] = res['conf'] / (res['conf'] + 1)
             view_node.pts = res['pts3d']
             next_view_nodes.extend(view_node.childs)

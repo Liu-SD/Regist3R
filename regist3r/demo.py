@@ -41,7 +41,7 @@ def get_args_parser():
 
 
 def get_reconstructed_scene(outdir, dust3r_model, regist3r_model, mast3r_model, retrieval_model, device, 
-                            silent, image_size, filelist,  tree_type, start_frame, tree_compression_factor, 
+                            silent, image_size, filelist, tree_type, start_frame, tree_compression_factor, 
                             affinity_mode, min_conf_thr, as_pointcloud, mask_sky, clean_depth, 
                             transparent_cams, cam_size):
     """
