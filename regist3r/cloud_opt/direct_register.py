@@ -28,13 +28,20 @@ class DirectRegister(BasePCOptimizer):
         self.pts3d = [p for p in pred['pts3d']]
         self.pp = [torch.tensor((W/2, H/2), device=self.device) for H, W in self.imshapes]
 
-        focal = float(estimate_focal_knowing_depth(self.pts3d[0][None], self.pp[0], focal_mode='weiszfeld'))
+        start = -1
+        for i, ir in zip(indices, ref_indices):
+            if i == ir:
+                start = i
+                break
+        assert start >= 0
+
+        focal = float(estimate_focal_knowing_depth(self.pts3d[start][None], self.pp[start], focal_mode='weiszfeld'))
 
         self.focals = [focal for _ in self.imshapes]
-        self.im_poses = [torch.eye(4, device=self.device)]
-        self.depth = [self.pts3d[0][..., 2]]
+        self.im_poses = []
+        self.depth = []
         # use dust3r pts1 to compute focal, and share this focal among all frames.
-        for i in tqdm.trange(1, self.n_imgs, desc="PnP Solving"):
+        for i in tqdm.trange(0, self.n_imgs, desc="PnP Solving"):
             H, W = self.imshapes[i]
             pts3d = self.pts3d[i].cpu().numpy()
             pixels = np.mgrid[:W, :H].T.astype(np.float32)

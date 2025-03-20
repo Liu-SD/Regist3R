@@ -69,6 +69,7 @@ def inference(sequence, filelist, dust3r_model, regist3r_model, mast3r_model, re
 
     view_nodes = tree.childs
     tree.pts = pred1['pts3d']
+    tree.conf = torch.ones_like(pred1['pts3d'][...,0])
     depth = 1
     while len(view_nodes) > 0:
         next_view_nodes = []
@@ -78,13 +79,14 @@ def inference(sequence, filelist, dust3r_model, regist3r_model, mast3r_model, re
             view = to_device(collate_with_cat([sequence[view_node.value]]))
             if verbose:
                 print(f"({len(result)+1}/{len(sequence)}|depth: {depth}) inference between {parent_node.value} and {view_node.value}.")
-            res = regist3r_model.inference(parent_view, parent_node.pts, view)
+            res = regist3r_model.inference(parent_view, parent_node.pts, parent_node.conf, view)
             result.append({'view': view, 'pred': res, 'index': view_node.value, 'ref_index': parent_node.value})
-            view['conf'] = res['conf'] / (res['conf'] + 1)
             view_node.pts = res['pts3d']
+            view_node.conf = res['conf'] / (res['conf'] + 1)
             next_view_nodes.extend(view_node.childs)
         view_nodes = next_view_nodes
         depth += 1
+    result = sorted(result, key=lambda r: r['index'])
     result = collate_with_cat(result, lists=False)
 
     return result

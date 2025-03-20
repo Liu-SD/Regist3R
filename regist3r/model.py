@@ -235,11 +235,12 @@ class Regist3R(CroCoNet):
         return res1, res2
     
     @torch.no_grad()
-    def inference(self, view_ref, pts_ref, view):
+    def inference(self, view_ref, pts_ref, conf_ref, view):
         pts_ref = pts_ref.permute(0,3,1,2)
         mean = pts_ref.mean(dim=(2,3), keepdim=True)
         avg_dis = torch.norm(pts_ref - mean, dim=1, keepdim=True).mean(dim=(2,3), keepdim=True)
         pts_ref_normed = (pts_ref - mean) / (avg_dis + 1e-8)
+        view_ref['conf'] = conf_ref
         res, _ = self._forward(view_ref, pts_ref_normed, view)
         res['pts3d'] = res['pts3d'] * avg_dis.permute(0,2,3,1) + mean.permute(0,2,3,1)
         return res
