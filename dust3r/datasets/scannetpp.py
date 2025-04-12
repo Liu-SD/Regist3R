@@ -16,11 +16,14 @@ from dust3r.utils.image import imread_cv2
 
 
 class ScanNetpp(BaseStereoViewDataset):
-    def __init__(self, *args, ROOT, **kwargs):
+    def __init__(self, *args, ROOT, track_length=2, **kwargs):
         self.ROOT = ROOT
         super().__init__(*args, **kwargs)
         assert self.split == 'train'
         self.loaded_data = self._load_data()
+        self.num_views = track_length
+        if track_length > 2:
+            self._build_index()
 
     def _load_data(self):
         with np.load(osp.join(self.ROOT, 'all_metadata.npz')) as data:
@@ -31,6 +34,14 @@ class ScanNetpp(BaseStereoViewDataset):
             self.trajectories = data['trajectories'].astype(np.float32)
             self.pairs = data['pairs'][:, :2].astype(int)
 
+    def _build_index(self):
+        from collections import defaultdict
+        pairs_dict = defaultdict(list)
+        for image_idx1, image_idx2 in self.pairs:
+            pairs_dict[image_idx1].append(image_idx2)
+            pairs_dict[image_idx2].append(image_idx1)
+        self.pairs_dict = pairs_dict
+
     def __len__(self):
         return len(self.pairs)
 
@@ -38,8 +49,18 @@ class ScanNetpp(BaseStereoViewDataset):
 
         image_idx1, image_idx2 = self.pairs[idx]
 
+        if self.num_views > 2:
+            view_idx = image_idx1
+            track = [view_idx]
+            while len(track) < self.num_views:
+                candidates = self.pairs_dict[view_idx]
+                view_idx = rng.choice(candidates)
+                track.append(view_idx)
+        else:
+            track = [image_idx1, image_idx2]
+
         views = []
-        for view_idx in [image_idx1, image_idx2]:
+        for view_idx in track:
             scene_id = self.sceneids[view_idx]
             scene_dir = osp.join(self.ROOT, self.scenes[scene_id])
 

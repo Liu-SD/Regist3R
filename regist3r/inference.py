@@ -5,6 +5,7 @@
 # utilities needed for the inference
 # --------------------------------------------------------
 import tqdm
+import numpy as np
 import torch
 from dust3r.utils.device import to_cpu, collate_with_cat
 from dust3r.inference import loss_of_one_batch as loss_of_one_batch_dust3r
@@ -65,34 +66,62 @@ def inference(sequence, filelist, dust3r_model, regist3r_model, mast3r_model, re
     # init_pair = [(sequence[start], sequence[start])]
     dust3r_res = loss_of_one_batch_dust3r(collate_with_cat(init_pair), dust3r_model, None, device)
     view1, view2, pred1, pred2 = [dust3r_res[k] for k in 'view1 view2 pred1 pred2'.split()]
-    result.append({'view': view1, 'pred': pred1, 'index': start, 'ref_index': start})
+    result.append({'view': view1, 'pred': pred1, 'index': [start], 'ref_index': [start]})
 
     view_nodes = tree.childs
     tree.pts = pred1['pts3d']
     tree.conf = torch.ones_like(pred1['pts3d'][...,0])
     depth = 1
+    batch_size = 64
     while len(view_nodes) > 0:
         next_view_nodes = []
-        for view_node in view_nodes:
-            parent_node = view_node.parent
-            parent_view = to_device(collate_with_cat([sequence[parent_node.value]]))
-            view = to_device(collate_with_cat([sequence[view_node.value]]))
+        for i in range(0, len(view_nodes), batch_size):
+            batch_view_nodes = view_nodes[i:i+batch_size]
+            parent_views = to_device(collate_with_cat([sequence[v.parent.value] for v in batch_view_nodes]))
+            views = to_device(collate_with_cat([sequence[v.value] for v in batch_view_nodes]))
+            parent_pts = torch.cat([v.parent.pts for v in batch_view_nodes])
+            parent_confs = torch.cat([v.parent.conf for v in batch_view_nodes])
+            parent_indices = [v.parent.value for v in batch_view_nodes]
+            view_indices = [v.value for v in batch_view_nodes]
             if verbose:
-                print(f"({len(result)+1}/{len(sequence)}|depth: {depth}) inference between {parent_node.value} and {view_node.value}.")
-            res = regist3r_model.inference(parent_view, parent_node.pts, parent_node.conf, view)
-            result.append({'view': view, 'pred': res, 'index': view_node.value, 'ref_index': parent_node.value})
-            view_node.pts = res['pts3d']
-            view_node.conf = res['conf'] / (res['conf'] + 1)
-            next_view_nodes.extend(view_node.childs)
+                total_done = sum([len(r['index']) for r in result])
+                print(f"({total_done}/{len(sequence)}|depth: {depth}) inference between {parent_indices} and {view_indices}.")
+            res = regist3r_model.inference(parent_views, parent_pts, parent_confs, views)
+            # register with dust3r in Light3R-SfM mode
+            # res = infer_then_align(dust3r_model, parent_views, parent_pts, views, device=device)
+            result.append({'view': views, 'pred': res, 'index': view_indices, 'ref_index': parent_indices})
+            for i, view_node in enumerate(batch_view_nodes):
+                view_node.pts = res['pts3d'][i:i+1]
+                view_node.conf = res['conf'][i:i+1] / (res['conf'][i:i+1]+1) # log-sigmoid
+                # Ablation study on confidence-aware autoregressive training.
+                # view_node.conf = torch.ones_like(res['conf'][i:i+1])
+                next_view_nodes.extend(view_node.childs)
         view_nodes = next_view_nodes
         depth += 1
-    result = sorted(result, key=lambda r: r['index'])
     result = collate_with_cat(result, lists=False)
-
+    result = sort_by(result, np.argsort(result["index"]).tolist())
     return result
 
+def sort_by(whatever, index):
+    if isinstance(whatever, dict):
+        return {k: sort_by(v, index) for k, v in whatever.items()}
+    if isinstance(whatever, torch.Tensor) or isinstance(whatever, np.ndarray):
+        return whatever[index]
+    if isinstance(whatever, list):
+        return [whatever[i] for i in index]
+    else:
+        return whatever
 
-@torch.inference_mode()
+def infer_then_align(dust3r_model, view_ref, pts_ref, view, device):
+    pair = [(view_ref, view)]
+    dust3r_res = loss_of_one_batch_dust3r(collate_with_cat(pair), dust3r_model, None, device)
+    view1, view2, pred1, pred2 = [dust3r_res[k] for k in 'view1 view2 pred1 pred2'.split()]
+    from regist3r.utils import procrustes_alignment
+    s, R, t = procrustes_alignment(pred1['pts3d'].view(-1, 3), pts_ref.view(-1, 3), pred1['conf'].view(-1))
+    view_pts3d = s * torch.einsum('ij, bhwi -> bhwj', R, pred2['pts3d_in_other_view']) + t
+    return {'pts3d': view_pts3d, 'conf': pred2['conf']}
+
+@torch.no_grad()
 def get_affinity_matrix_asmk(filelist, retrieval_model, backnone, device):
     from mast3r.retrieval.processor import Retriever
     retriever = Retriever(retrieval_model, backbone=backnone, device=device)
@@ -101,7 +130,7 @@ def get_affinity_matrix_asmk(filelist, retrieval_model, backnone, device):
     affinity_matrix.masked_fill_(torch.eye(len(filelist), device=device, dtype=torch.bool), 1.)
     return affinity_matrix
 
-@torch.inference_mode()
+@torch.no_grad()
 @torch.amp.autocast('cuda')
 def get_affinity_matrix(views, dust3r_model, pairwise=False):
     imgs = views['img']

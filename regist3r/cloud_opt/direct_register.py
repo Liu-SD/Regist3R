@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import cv2
 import tqdm
+import concurrent.futures
 
 from dust3r.viz import rgb
 from dust3r.cloud_opt.base_opt import BasePCOptimizer
@@ -10,14 +11,14 @@ from dust3r.utils.geometry import inv, geotrf
 
 
 class DirectRegister(BasePCOptimizer):
-    def __init__(self, view, pred, indices, ref_indices):
+    def __init__(self, view, pred, indices, ref_indices, focals=None):
         super(BasePCOptimizer, self).__init__()
         self.n_imgs = len(view['img'])
         self.edges = [(int(view['idx'][i]), int(view['idx'][i+1])) for i in range(self.n_imgs-1)]
         self.imshapes = [view['img'][i].shape[-2:] for i in range(self.n_imgs)]
         self.conf_trf = lambda x : x.log()
         self.im_conf = [v for v in pred['conf']]
-        self.min_conf_thr = 3
+        self.min_conf_thr = 6
 
         # possibly store images for show_pointcloud
         self.imgs = None
@@ -28,27 +29,31 @@ class DirectRegister(BasePCOptimizer):
         self.pts3d = [p for p in pred['pts3d']]
         self.pp = [torch.tensor((W/2, H/2), device=self.device) for H, W in self.imshapes]
 
-        start = -1
-        for i, ir in zip(indices, ref_indices):
-            if i == ir:
-                start = i
-                break
-        assert start >= 0
+        if focals is None:
+            start = -1
+            for i, ir in zip(indices, ref_indices):
+                if i == ir:
+                    start = i
+                    break
+            assert start >= 0
 
-        focal = float(estimate_focal_knowing_depth(self.pts3d[start][None], self.pp[start], focal_mode='weiszfeld'))
+            focal = float(estimate_focal_knowing_depth(self.pts3d[start][None], self.pp[start], focal_mode='weiszfeld'))
+            self.focals = [focal for _ in self.imshapes]
+        else:
+            self.focals = focals
 
-        self.focals = [focal for _ in self.imshapes]
-        self.im_poses = []
-        self.depth = []
-        # use dust3r pts1 to compute focal, and share this focal among all frames.
-        for i in tqdm.trange(0, self.n_imgs, desc="PnP Solving"):
+        self.im_poses = [None] * self.n_imgs
+        self.depth = [None] * self.n_imgs
+
+        def process_frame(i):
             H, W = self.imshapes[i]
             pts3d = self.pts3d[i].cpu().numpy()
             pixels = np.mgrid[:W, :H].T.astype(np.float32)
             assert pts3d.shape[:2] == (H, W)
             msk = self.get_masks()[i].cpu().numpy()
+            focal = self.focals[i]
             K = np.float32([(focal, 0, W/2), (0, focal, H/2), (0, 0, 1)])
-
+    
             try:
                 res = cv2.solvePnPRansac(pts3d[msk], pixels[msk], K, None,
                                          iterationsCount=100, reprojectionError=5, flags=cv2.SOLVEPNP_SQPNP)
@@ -59,9 +64,20 @@ class DirectRegister(BasePCOptimizer):
                 pose = inv(np.r_[np.c_[R, T], [(0, 0, 0, 1)]])
             except:
                 pose = np.eye(4)
-            rel_pose = torch.from_numpy(pose.astype(np.float32)).to(self.device)
-            self.im_poses.append(rel_pose)
-            self.depth.append(geotrf(inv(rel_pose), self.pts3d[i])[..., 2])
+            return i, pose
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(process_frame, i) for i in range(self.n_imgs)]
+    
+            for future in tqdm.tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(futures),
+                desc="Parallel PnP"
+            ):
+                i, pose = future.result()
+                rel_pose = torch.from_numpy(pose.astype(np.float32)).to(self.device)
+                self.im_poses[i] = rel_pose
+                self.depth[i] = geotrf(inv(rel_pose), self.pts3d[i])[..., 2]
 
         self.im_poses = torch.stack(self.im_poses, dim=0)
         self.im_conf = torch.stack(self.im_conf, dim=0)
